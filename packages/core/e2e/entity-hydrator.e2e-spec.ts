@@ -1,13 +1,15 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 import {
-    ChannelService,
+    ActiveOrderService,
     EntityHydrator,
     mergeConfig,
     Order,
+    orderFixedDiscount,
+    OrderService,
     Product,
     ProductVariant,
-    RequestContext,
-    ActiveOrderService,
+    RequestContextService,
+    User,
 } from '@vendure/core';
 import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
 import gql from 'graphql-tag';
@@ -15,17 +17,24 @@ import path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
 import { HydrationTestPlugin } from './fixtures/test-plugins/hydration-test-plugin';
-import { UpdateChannelMutation, UpdateChannelMutationVariables } from './graphql/generated-e2e-admin-types';
+import * as Codegen from './graphql/generated-e2e-admin-types';
+import {
+    LanguageCode,
+    UpdateChannelMutation,
+    UpdateChannelMutationVariables,
+} from './graphql/generated-e2e-admin-types';
 import {
     AddItemToOrderDocument,
     AddItemToOrderMutation,
     AddItemToOrderMutationVariables,
+    ApplyCouponCodeDocument,
+    SetShippingMethodDocument,
     UpdatedOrderFragment,
 } from './graphql/generated-e2e-shop-types';
-import { UPDATE_CHANNEL } from './graphql/shared-definitions';
+import { CREATE_PROMOTION, UPDATE_CHANNEL } from './graphql/shared-definitions';
 import { ADD_ITEM_TO_ORDER } from './graphql/shop-definitions';
 
 const orderResultGuard: ErrorResultGuard<UpdatedOrderFragment> = createErrorResultGuard(
@@ -43,7 +52,7 @@ describe('Entity hydration', () => {
         await server.init({
             initialData,
             productsCsvPath: path.join(__dirname, 'fixtures/e2e-products-full.csv'),
-            customerCount: 1,
+            customerCount: 2,
         });
         await adminClient.asSuperAdmin();
     }, TEST_SETUP_TIMEOUT_MS);
@@ -255,21 +264,12 @@ describe('Entity hydration', () => {
                 quantity: 1,
             });
             orderResultGuard.assertSuccess(addItemToOrder);
-            const channel = await server.app.get(ChannelService).getDefaultChannel();
-            // This is ugly, but in our real life example we use a CTX constructed by Vendure
+
             const internalOrderId = +addItemToOrder.id.replace(/^\D+/g, '');
-            const ctx = new RequestContext({
-                channel,
-                authorizedAsOwnerOnly: true,
+            const ctx = await server.app.get(RequestContextService).create({
                 apiType: 'shop',
-                isAuthorized: true,
-                session: {
-                    activeOrderId: internalOrderId,
-                    activeChannelId: 1,
-                    user: {
-                        id: 2,
-                    },
-                } as any,
+                activeOrderId: internalOrderId,
+                user: new User({ id: 2 }),
             });
             order = await server.app.get(ActiveOrderService).getActiveOrder(ctx, undefined);
             await server.app.get(EntityHydrator).hydrate(ctx, order!, {
@@ -288,6 +288,112 @@ describe('Entity hydration', () => {
 
         it('Variant of orderLine 3 has a price', async () => {
             expect(order!.lines[1].productVariant.priceWithTax).toBeGreaterThan(0);
+        });
+    });
+
+    describe('hydrating Order.discounts', () => {
+        let orderId: string;
+
+        beforeAll(async () => {
+            await adminClient.query<
+                Codegen.CreatePromotionMutation,
+                Codegen.CreatePromotionMutationVariables
+            >(CREATE_PROMOTION, {
+                input: {
+                    enabled: true,
+                    couponCode: 'TEST',
+                    translations: [
+                        {
+                            languageCode: LanguageCode.en,
+                            name: 'test promotion',
+                            description: 'a test promotion',
+                        },
+                    ],
+                    conditions: [],
+                    actions: [
+                        {
+                            code: orderFixedDiscount.code,
+                            arguments: [
+                                {
+                                    name: 'discount',
+                                    value: '50',
+                                },
+                            ],
+                        },
+                    ],
+                },
+            });
+        });
+
+        it('order has discounts before hydration', async () => {
+            await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
+
+            await shopClient.query(AddItemToOrderDocument, {
+                productVariantId: 'T_1',
+                quantity: 1,
+            });
+
+            await shopClient.query(SetShippingMethodDocument, {
+                id: 'T_1',
+            });
+
+            const { applyCouponCode } = await shopClient.query(ApplyCouponCodeDocument, {
+                couponCode: 'TEST',
+            });
+
+            orderResultGuard.assertSuccess(applyCouponCode);
+
+            expect(applyCouponCode.discounts).toEqual([
+                {
+                    adjustmentSource: 'PROMOTION:1',
+                    amount: -50,
+                    amountWithTax: -60,
+                    description: 'test promotion',
+                    type: 'DISTRIBUTED_ORDER_PROMOTION',
+                },
+            ]);
+
+            orderId = applyCouponCode.id;
+        });
+
+        it('order has discounts after hydration', async () => {
+            const internalOrderId = +orderId.replace(/^\D+/g, '');
+            const ctx = await server.app.get(RequestContextService).create({
+                apiType: 'shop',
+                activeOrderId: internalOrderId,
+                user: new User({ id: 2 }),
+            });
+            // const order = await server.app.get(ActiveOrderService).getActiveOrder(ctx, undefined);
+            const order = await server.app.get(OrderService).findOne(ctx, internalOrderId);
+            expect(order?.discounts).toEqual([
+                {
+                    adjustmentSource: 'PROMOTION:1',
+                    amount: -50,
+                    amountWithTax: -60,
+                    description: 'test promotion',
+                    type: 'DISTRIBUTED_ORDER_PROMOTION',
+                    data: {
+                        itemDistribution: [-50],
+                    },
+                },
+            ]);
+
+            await server.app.get(EntityHydrator).hydrate(ctx, order!, {
+                relations: ['lines.productVariant.stockLevels'],
+            });
+
+            expect(order?.discounts).toEqual([
+                {
+                    adjustmentSource: 'PROMOTION:1',
+                    amount: -50,
+                    amountWithTax: -60,
+                    description: 'test promotion',
+                    type: 'DISTRIBUTED_ORDER_PROMOTION',
+                    data: {
+                        itemDistribution: [-50],
+                    },
+                },
+            ]);
         });
     });
 });
