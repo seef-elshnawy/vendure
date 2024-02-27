@@ -314,6 +314,87 @@ describe('Default search plugin', () => {
         ]);
     }
 
+    async function testMatchFacetValueFiltersNotOrSingle(testProducts: TestProducts) {
+        const result = await testProducts({
+            groupByProduct: true,
+            facetValueFilters: [{ not: { or: ['T_1'] } }],
+        });
+
+        expect(result.search.items.map(i => i.productName)).toEqual([
+            'Road Bike',
+            'Skipping Rope',
+            'Boxing Gloves',
+            'Tent',
+            'Cruiser Skateboard',
+            'Football',
+            'Running Shoe',
+            'Spiky Cactus',
+            'Orchid',
+            'Bonsai Tree',
+        ]);
+    }
+
+    async function testMatchFacetValueFiltersNotOrMultiple(testProducts: TestProducts) {
+        const result = await testProducts({
+            groupByProduct: true,
+            facetValueFilters: [{ not: { or: ['T_2', 'T_4'] } }],
+        });
+
+        expect(result.search.items.map(i => i.productName)).toEqual([
+            'Instant Camera',
+            'Camera Lens',
+            'Tripod',
+            'Slr Camera',
+            'Spiky Cactus',
+            'Orchid',
+            'Bonsai Tree',
+        ]);
+    }
+
+    async function testMatchFacetValueFiltersNotAndMultiple(testProducts: TestProducts) {
+        const result = await testProducts({
+            groupByProduct: true,
+            facetValueFilters: [{ not: { and: 'T_1' } }, { not: { and: 'T_2' } }],
+        });
+
+        expect(result.search.items.map(i => i.productName)).toEqual([
+            'Instant Camera',
+            'Camera Lens',
+            'Tripod',
+            'Slr Camera',
+            'Road Bike',
+            'Skipping Rope',
+            'Boxing Gloves',
+            'Tent',
+            'Cruiser Skateboard',
+            'Football',
+            'Running Shoe',
+            'Spiky Cactus',
+            'Orchid',
+            'Bonsai Tree',
+        ]);
+    }
+
+    async function testMatchFacetValueFiltersNotAndSingle(testProducts: TestProducts) {
+        const result = await testProducts({
+            groupByProduct: true,
+            facetValueFilters: [{ not: { and: 'T_1' } }],
+        });
+
+        expect(result.search.items.map(i => i.productName)).toEqual([
+            'Road Bike',
+            'Skipping Rope',
+            'Boxing Gloves',
+            'Tent',
+            'Cruiser Skateboard',
+            'Football',
+            'Running Shoe',
+            'Spiky Cactus',
+            'Orchid',
+            'Bonsai Tree',
+        ]);
+    }
+
     async function testMatchFacetValueFiltersOrWithAnd(testProducts: TestProducts) {
         const result = await testProducts({
             groupByProduct: true,
@@ -477,6 +558,18 @@ describe('Default search plugin', () => {
 
         it('matches by FacetValueFilters with facetId AND operator', () =>
             testMatchFacetValueFiltersWithFacetIdsAnd(testProductsShop));
+
+        it('matches by FacetValueFilters NOT OR single', () =>
+            testMatchFacetValueFiltersNotOrSingle(testProductsShop));
+
+        it('matches by FacetValueFilters NOT AND single', () =>
+            testMatchFacetValueFiltersNotAndSingle(testProductsShop));
+
+        it('matches by FacetValueFilters NOT OR multiple', () =>
+            testMatchFacetValueFiltersNotOrMultiple(testProductsShop));
+
+        it('matches by FacetValueFilters NOT AND multiple', () =>
+            testMatchFacetValueFiltersNotAndMultiple(testProductsShop));
 
         it('matches by collectionId', () => testMatchCollectionId(testProductsShop));
 
